@@ -550,7 +550,7 @@ void CommonDataSubscriber::setupDepthCallbacks(
 #endif
 	if(subscribeOdom)
 	{
-		odomSub_.subscribe(nh, "odom", 1);
+//		odomSub_.subscribe(nh, "odom", 1);
 
 		if(subscribeScanDesc)
 		{
@@ -605,7 +605,7 @@ void CommonDataSubscriber::setupDepthCallbacks(
 		}
 		else
 		{
-			SYNC_DECL4(depthOdom, approxSync, queueSize, odomSub_, imageSub_, imageDepthSub_, cameraInfoSub_);
+//			SYNC_DECL4(depthOdom, approxSync, queueSize, odomSub_, imageSub_, imageDepthSub_, cameraInfoSub_);
 		}
 	}
 #ifdef RTABMAP_SYNC_USER_DATA

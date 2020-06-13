@@ -338,6 +338,18 @@
       <remap from="odom"                   to="$(arg odom_topic)"/>
       <remap from="imu"                    to="$(arg imu_topic)"/>
       
+      <!-- rovy -->
+      <!-- use actionlib to send goals to move_base -->
+      <param name="use_action_for_goal" type="bool" value="true"/>
+      <remap from="move_base"            to="/move_base"/>
+
+      <remap from="grid_map" to="/map"/>
+
+      <param name="subscribe_depth"       value="true"/>
+      <param name="subscribe_scan_cloud"  value="false"/>
+      <param name="subscribe_scan"        value="false"/>
+      <!-- /rovy -->
+
       <!-- localization mode -->
       <param     if="$(arg localization)" name="Mem/IncrementalMemory" type="string" value="false"/>
       <param unless="$(arg localization)" name="Mem/IncrementalMemory" type="string" value="true"/>
