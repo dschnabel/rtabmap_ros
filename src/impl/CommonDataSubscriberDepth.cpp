@@ -26,6 +26,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <rtabmap_ros/CommonDataSubscriber.h>
+#include <rovy_navigation_cameras/rovy_navigation_cameras.h>
 
 namespace rtabmap_ros {
 
@@ -467,7 +468,16 @@ void CommonDataSubscriber::setupDepthCallbacks(
 		int queueSize,
 		bool approxSync)
 {
-	ROS_INFO("Setup depth callback");
+    ROS_INFO("Setup Rovy Cameras");
+    int res = rovy_start_cameras(nh, std::bind(&CommonDataSubscriber::depthOdomCallback, this,
+            std::placeholders::_1,
+            std::placeholders::_2,
+            std::placeholders::_3,
+            std::placeholders::_4)
+    );
+    if (res != 0) {
+        throw 1;
+    }
 
 	std::string rgbPrefix = "rgb";
 	std::string depthPrefix = "depth";
