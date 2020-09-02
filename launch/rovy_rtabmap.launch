@@ -1,0 +1,26 @@
+<launch>
+    <arg name="use_rviz"                  default="false"/>
+    <arg name="use_rtabmapviz"            default="false"/>
+    <arg name="delete_db"                 default="false"/>
+    <arg name="mapping"                   default="false"/>
+
+    <include file="$(find rtabmap_ros)/launch/rtabmap.launch">
+            <arg name="cfg"                value="$(find rtabmap_ros)/launch/rovy_config.ini"/>
+            <arg name="rtabmap_args"       value="--delete_db_on_start --Vis/MinInliers 20" if="$(arg delete_db)"/>
+            <arg name="rtabmap_args"       value="--Vis/MinInliers 70" unless="$(arg mapping)"/>
+            <arg name="localization"       value="true" unless="$(arg mapping)"/>
+            <arg name="frame_id"           value="d435_link"/>
+            <arg name="visual_odometry"    value="false"/>
+            <arg name="odom_topic"         value="/odom"/>
+            <arg name="rgb_topic"          value="/color"/>
+            <arg name="depth_topic"        value="/depth"/>
+            <arg name="camera_info_topic"  value="/camera_info"/>
+            <arg name="queue_size"         value="500"/>
+            <arg name="rviz"               value="$(arg use_rviz)"/>
+            <arg name="rtabmapviz"         value="$(arg use_rtabmapviz)"/>
+            <arg name="approx_sync"        value="true"/>
+
+            <arg name="publish_tf_odom"    value="false"/>
+    </include>
+
+</launch>
