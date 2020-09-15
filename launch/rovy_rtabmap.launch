@@ -5,6 +5,7 @@
     <arg name="mapping"                   default="false"/>
 
     <include file="$(find rtabmap_ros)/launch/rtabmap.launch">
+            <env name="ROSCONSOLE_CONFIG_FILE" value="$(find rtabmap_ros)/launch/debug.conf"/>
             <arg name="cfg"                value="$(find rtabmap_ros)/launch/rovy_config.ini"/>
             <arg name="rtabmap_args"       value="--delete_db_on_start --Vis/MinInliers 20" if="$(arg delete_db)"/>
             <arg name="rtabmap_args"       value="--Vis/MinInliers 70" unless="$(arg mapping)"/>
