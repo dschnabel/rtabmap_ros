@@ -74,8 +74,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap_ros/Info.h"
 #include "rtabmap_ros/MapData.h"
 #include "rtabmap_ros/MapGraph.h"
-#include "rtabmap_ros/GetMap.h"
-#include "rtabmap_ros/PublishMap.h"
 #include "rtabmap_ros/Path.h"
 
 #include "rtabmap_ros/MsgConversion.h"
@@ -117,6 +115,7 @@ CoreWrapper::CoreWrapper() :
 		rate_(Parameters::defaultRtabmapDetectionRate()),
 		createIntermediateNodes_(Parameters::defaultRtabmapCreateIntermediateNodes()),
 		maxMappingNodes_(Parameters::defaultGridGlobalMaxNodes()),
+		alreadyRectifiedImages_(Parameters::defaultRtabmapImagesAlreadyRectified()),
 		previousStamp_(0),
 		mbClient_(0)
 {
@@ -546,6 +545,10 @@ void CoreWrapper::onInit()
 			NODELET_INFO("Max mapping nodes = %d", maxMappingNodes_);
 		}
 	}
+	if(parameters_.find(Parameters::kRtabmapImagesAlreadyRectified()) != parameters_.end())
+	{
+		Parameters::parse(parameters_, Parameters::kRtabmapImagesAlreadyRectified(), alreadyRectifiedImages_);
+	}
 
 	if(paused_)
 	{
@@ -601,6 +604,7 @@ void CoreWrapper::onInit()
 	setModeMappingSrv_ = nh.advertiseService("set_mode_mapping", &CoreWrapper::setModeMappingCallback, this);
 	getNodeDataSrv_ = nh.advertiseService("get_node_data", &CoreWrapper::getNodeDataCallback, this);
 	getMapDataSrv_ = nh.advertiseService("get_map_data", &CoreWrapper::getMapDataCallback, this);
+	getMapData2Srv_ = nh.advertiseService("get_map_data2", &CoreWrapper::getMapData2Callback, this);
 	getMapSrv_ = nh.advertiseService("get_map", &CoreWrapper::getMapCallback, this);
 	getProbMapSrv_ = nh.advertiseService("get_prob_map", &CoreWrapper::getProbMapCallback, this);
 	getGridMapSrv_ = nh.advertiseService("get_grid_map", &CoreWrapper::getGridMapCallback, this);
@@ -1335,7 +1339,8 @@ void CoreWrapper::commonStereoCallback(
 			right,
 			stereoModel,
 			tfListener_,
-			waitForTransform_?waitForTransformDuration_:0.0))
+			waitForTransform_?waitForTransformDuration_:0.0,
+			alreadyRectifiedImages_))
 	{
 		NODELET_ERROR("Could not convert stereo msgs! Aborting rtabmap update...");
 		return;
@@ -2214,10 +2219,32 @@ void CoreWrapper::tagDetectionsAsyncCallback(const apriltag_ros::AprilTagDetecti
 				if(!tagDetections.detections[i].pose.header.frame_id.empty())
 				{
 					p.header.frame_id = tagDetections.detections[i].pose.header.frame_id;
+
+					static bool warned = false;
+					if(!warned &&
+						!tagDetections.header.frame_id.empty() &&
+						tagDetections.detections[i].pose.header.frame_id.compare(tagDetections.header.frame_id)!=0)
+					{
+						NODELET_WARN("frame_id set for individual tag detections (%s) doesn't match the frame_id of the message (%s), "
+								"the resulting pose of the tag may be wrong. This message is only printed once.",
+								tagDetections.detections[i].pose.header.frame_id.c_str(), tagDetections.header.frame_id.c_str());
+						warned = true;
+					}
 				}
 				if(!tagDetections.detections[i].pose.header.stamp.isZero())
 				{
 					p.header.stamp = tagDetections.detections[i].pose.header.stamp;
+
+					static bool warned = false;
+					if(!warned &&
+						!tagDetections.header.stamp.isZero() &&
+						tagDetections.detections[i].pose.header.stamp != tagDetections.header.stamp)
+					{
+						NODELET_WARN("stamp set for individual tag detections (%f) doesn't match the stamp of the message (%f), "
+								"the resulting pose of the tag may be wrongly interpolated. This message is only printed once.",
+								tagDetections.detections[i].pose.header.stamp.toSec(), tagDetections.header.stamp.toSec());
+						warned = true;
+					}
 				}
 				uInsert(tags_, std::make_pair(tagDetections.detections[i].id[0], p));
 			}
@@ -2588,6 +2615,17 @@ bool CoreWrapper::triggerNewMapCallback(std_srvs::Empty::Request&, std_srvs::Emp
 bool CoreWrapper::backupDatabaseCallback(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
 	NODELET_INFO("Backup: Saving memory...");
+	if(rtabmap_.getMemory())
+	{
+		// save the grid map
+		float xMin=0.0f, yMin=0.0f, gridCellSize = 0.05f;
+		cv::Mat pixels = mapsManager_.getGridMap(xMin, yMin, gridCellSize);
+		if(!pixels.empty())
+		{
+			printf("rtabmap: 2D occupancy grid map saved.\n");
+			rtabmap_.getMemory()->save2DMap(pixels, xMin, yMin, gridCellSize);
+		}
+	}
 	rtabmap_.close();
 	NODELET_INFO("Backup: Saving memory... done!");
 
@@ -2623,6 +2661,7 @@ bool CoreWrapper::setModeLocalizationCallback(std_srvs::Empty::Request&, std_srv
 	ros::NodeHandle & nh = getNodeHandle();
 	nh.setParam(rtabmap::Parameters::kMemIncrementalMemory(), "false");
 	rtabmap_.parseParameters(parameters);
+	NODELET_INFO("rtabmap: Localization mode enabled!");
 	return true;
 }
 
@@ -2634,6 +2673,7 @@ bool CoreWrapper::setModeMappingCallback(std_srvs::Empty::Request&, std_srvs::Em
 	ros::NodeHandle & nh = getNodeHandle();
 	nh.setParam(rtabmap::Parameters::kMemIncrementalMemory(), "true");
 	rtabmap_.parseParameters(parameters);
+	NODELET_INFO("rtabmap: Mapping mode enabled!");
 	return true;
 }
 
@@ -2671,11 +2711,14 @@ bool CoreWrapper::getNodeDataCallback(rtabmap_ros::GetNodeData::Request& req, rt
 			req.grid?"true":"false",
 			req.user_data?"true":"false");
 
+	if(req.ids.empty() && rtabmap_.getMemory() && rtabmap_.getMemory()->getLastWorkingSignature())
+	{
+		req.ids.push_back(rtabmap_.getMemory()->getLastWorkingSignature()->id());
+	}
 	for(size_t i=0; i<req.ids.size(); ++i)
 	{
-
 		int id = req.ids[i];
-		Signature s = rtabmap_.getSignatureCopy(id, req.images, req.scan, req.user_data, req.grid);
+		Signature s = rtabmap_.getSignatureCopy(id, req.images, req.scan, req.user_data, req.grid, true, true);
 
 		if(s.id()>0)
 		{
@@ -2722,6 +2765,45 @@ bool CoreWrapper::getMapDataCallback(rtabmap_ros::GetMap::Request& req, rtabmap_
 	return true;
 }
 
+bool CoreWrapper::getMapData2Callback(rtabmap_ros::GetMap2::Request& req, rtabmap_ros::GetMap2::Response& res)
+{
+	NODELET_INFO("rtabmap: Getting map (global=%s optimized=%s with_images=%s with_scans=%s with_user_data=%s with_grids=%s)...",
+			req.global?"true":"false",
+			req.optimized?"true":"false",
+			req.with_images?"true":"false",
+			req.with_scans?"true":"false",
+			req.with_user_data?"true":"false",
+			req.with_grids?"true":"false");
+	std::map<int, Signature> signatures;
+	std::map<int, Transform> poses;
+	std::multimap<int, rtabmap::Link> constraints;
+
+	rtabmap_.getGraph(
+			poses,
+			constraints,
+			req.optimized,
+			req.global,
+			&signatures,
+			req.with_images,
+			req.with_scans,
+			req.with_user_data,
+			req.with_grids,
+			req.with_words,
+			req.with_global_descriptors);
+
+	//RGB-D SLAM data
+	rtabmap_ros::mapDataToROS(poses,
+		constraints,
+		signatures,
+		mapToOdom_,
+		res.data);
+
+	res.data.header.stamp = ros::Time::now();
+	res.data.header.frame_id = mapFrameId_;
+
+	return true;
+}
+
 bool CoreWrapper::getProjMapCallback(nav_msgs::GetMap::Request  &req, nav_msgs::GetMap::Response &res)
 {
 	if(parameters_.find(Parameters::kGridFromDepth()) != parameters_.end() &&
@@ -2748,6 +2830,10 @@ bool CoreWrapper::getGridMapCallback(nav_msgs::GetMap::Request  &req, nav_msgs::
 
 bool CoreWrapper::getMapCallback(nav_msgs::GetMap::Request  &req, nav_msgs::GetMap::Response &res)
 {
+	// Make sure grid map cache is up to date (in case there is no subscriber on map topics)
+	std::map<int, Transform> poses = rtabmap_.getLocalOptimizedPoses();
+	mapsManager_.updateMapCaches(poses, rtabmap_.getMemory(), true, false);
+
 	// create the grid map
 	float xMin=0.0f, yMin=0.0f, gridCellSize = 0.05f;
 	cv::Mat pixels = mapsManager_.getGridMap(xMin, yMin, gridCellSize);
@@ -2776,11 +2862,19 @@ bool CoreWrapper::getMapCallback(nav_msgs::GetMap::Request  &req, nav_msgs::GetM
 		res.map.header.stamp = ros::Time::now();
 		return true;
 	}
+	else
+	{
+		NODELET_WARN("rtabmap: The map is empty!");
+	}
 	return false;
 }
 
 bool CoreWrapper::getProbMapCallback(nav_msgs::GetMap::Request  &req, nav_msgs::GetMap::Response &res)
 {
+	// Make sure grid map cache is up to date (in case there is no subscriber on map topics)
+	std::map<int, Transform> poses = rtabmap_.getLocalOptimizedPoses();
+	mapsManager_.updateMapCaches(poses, rtabmap_.getMemory(), true, false);
+
 	// create the grid map
 	float xMin=0.0f, yMin=0.0f, gridCellSize = 0.05f;
 	cv::Mat pixels = mapsManager_.getGridProbMap(xMin, yMin, gridCellSize);
@@ -2809,12 +2903,18 @@ bool CoreWrapper::getProbMapCallback(nav_msgs::GetMap::Request  &req, nav_msgs::
 		res.map.header.stamp = ros::Time::now();
 		return true;
 	}
+	else
+	{
+		NODELET_WARN("rtabmap: The map is empty!");
+	}
 	return false;
 }
 
 bool CoreWrapper::publishMapCallback(rtabmap_ros::PublishMap::Request& req, rtabmap_ros::PublishMap::Response& res)
 {
 	NODELET_INFO("rtabmap: Publishing map...");
+
+	ros::Time now = ros::Time::now();
 
 	if(mapDataPub_.getNumSubscribers() ||
 	   (!req.graphOnly && mapsManager_.hasSubscribers()) ||
@@ -2835,7 +2935,6 @@ bool CoreWrapper::publishMapCallback(rtabmap_ros::PublishMap::Request& req, rtab
 				!req.graphOnly,
 				!req.graphOnly);
 
-		ros::Time now = ros::Time::now();
 		if(mapDataPub_.getNumSubscribers())
 		{
 			rtabmap_ros::MapDataPtr msg(new rtabmap_ros::MapData);
@@ -2913,36 +3012,44 @@ bool CoreWrapper::publishMapCallback(rtabmap_ros::PublishMap::Request& req, rtab
 			landmarksPub_.publish(msg);
 		}
 
-		if(!req.graphOnly && mapsManager_.hasSubscribers())
+		if(!req.graphOnly)
 		{
-			std::map<int, Transform> filteredPoses(poses.lower_bound(1), poses.end());
-			if(maxMappingNodes_ > 0 && filteredPoses.size()>1)
+			if(mapsManager_.hasSubscribers())
 			{
-				std::map<int, Transform> nearestPoses;
-				std::vector<int> nodes = graph::findNearestNodes(filteredPoses, filteredPoses.rbegin()->second, maxMappingNodes_);
-				for(std::vector<int>::iterator iter=nodes.begin(); iter!=nodes.end(); ++iter)
+				std::map<int, Transform> filteredPoses(poses.lower_bound(1), poses.end());
+				if(maxMappingNodes_ > 0 && filteredPoses.size()>1)
 				{
-					std::map<int, Transform>::iterator pter = filteredPoses.find(*iter);
-					if(pter != filteredPoses.end())
+					std::map<int, Transform> nearestPoses;
+					std::vector<int> nodes = graph::findNearestNodes(filteredPoses, filteredPoses.rbegin()->second, maxMappingNodes_);
+					for(std::vector<int>::iterator iter=nodes.begin(); iter!=nodes.end(); ++iter)
 					{
-						nearestPoses.insert(*pter);
+						std::map<int, Transform>::iterator pter = filteredPoses.find(*iter);
+						if(pter != filteredPoses.end())
+						{
+							nearestPoses.insert(*pter);
+						}
 					}
 				}
-			}
-			if(signatures.size())
-			{
-				filteredPoses = mapsManager_.updateMapCaches(
-						filteredPoses,
-						rtabmap_.getMemory(),
-						false,
-						false,
-						signatures);
+				if(signatures.size())
+				{
+					filteredPoses = mapsManager_.updateMapCaches(
+							filteredPoses,
+							rtabmap_.getMemory(),
+							false,
+							false,
+							signatures);
+				}
+				else
+				{
+					filteredPoses = mapsManager_.getFilteredPoses(filteredPoses);
+				}
+				mapsManager_.publishMaps(filteredPoses, now, mapFrameId_);
 			}
 			else
 			{
-				filteredPoses = mapsManager_.getFilteredPoses(filteredPoses);
+				// this will cleanup the cache if there are no subscribers
+				mapsManager_.publishMaps(std::map<int, Transform>(), now, mapFrameId_);
 			}
-			mapsManager_.publishMaps(filteredPoses, now, mapFrameId_);
 		}
 
 		bool pubPath = mapPathPub_.getNumSubscribers();
@@ -3049,6 +3156,11 @@ bool CoreWrapper::publishMapCallback(rtabmap_ros::PublishMap::Request& req, rtab
 	else
 	{
 		UWARN("No subscribers, don't need to publish!");
+		if(!req.graphOnly)
+		{
+			// this will cleanup the cache if there are no subscribers
+			mapsManager_.publishMaps(std::map<int, Transform>(), now, mapFrameId_);
+		}
 	}
 
 	return true;
@@ -3768,7 +3880,7 @@ bool CoreWrapper::octomapBinaryCallback(
 		poses = nearestPoses;
 	}
 
-	poses = mapsManager_.updateMapCaches(poses, rtabmap_.getMemory(), false, true);
+	mapsManager_.updateMapCaches(poses, rtabmap_.getMemory(), false, true);
 
 	const rtabmap::OctoMap * octomap = mapsManager_.getOctomap();
 	bool success = octomap->octree()->size() && octomap_msgs::binaryMapToMsg(*octomap->octree(), res.map);
@@ -3799,7 +3911,7 @@ bool CoreWrapper::octomapFullCallback(
 		poses = nearestPoses;
 	}
 
-	poses = mapsManager_.updateMapCaches(poses, rtabmap_.getMemory(), false, true);
+	mapsManager_.updateMapCaches(poses, rtabmap_.getMemory(), false, true);
 
 	const rtabmap::OctoMap * octomap = mapsManager_.getOctomap();
 	bool success = octomap->octree()->size() && octomap_msgs::fullMapToMsg(*octomap->octree(), res.map);

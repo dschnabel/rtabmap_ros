@@ -445,6 +445,7 @@ void infoToROS(const rtabmap::Statistics & stats, rtabmap_ros::Info & info)
 	info.refId = stats.refImageId();
 	info.loopClosureId = stats.loopClosureId();
 	info.proximityDetectionId = stats.proximityDetectionId();
+	info.landmarkId =  static_cast<int>(uValue(stats.data(), rtabmap::Statistics::kLoopLandmark_detected(), 0.0f));
 
 	rtabmap_ros::transformToGeometryMsg(stats.loopClosureTransform(), info.loopClosureTransform);
 
@@ -562,6 +563,46 @@ void globalDescriptorsToROS(const std::vector<rtabmap::GlobalDescriptor> & desc,
 		for(unsigned int i=0; i<msg.size(); ++i)
 		{
 			globalDescriptorToROS(desc[i], msg[i]);
+		}
+	}
+}
+
+rtabmap::EnvSensor envSensorFromROS(const rtabmap_ros::EnvSensor & msg)
+{
+	return rtabmap::EnvSensor((rtabmap::EnvSensor::Type)msg.type, msg.value, timestampFromROS(msg.header.stamp));
+}
+
+void envSensorToROS(const rtabmap::EnvSensor & sensor, rtabmap_ros::EnvSensor & msg)
+{
+	msg.type = sensor.type();
+	msg.value = sensor.value();
+	msg.header.stamp = ros::Time(sensor.stamp());
+}
+
+rtabmap::EnvSensors envSensorsFromROS(const std::vector<rtabmap_ros::EnvSensor> & msg)
+{
+	rtabmap::EnvSensors v;
+	if(!msg.empty())
+	{
+		for(unsigned int i=0; i<msg.size(); ++i)
+		{
+			rtabmap::EnvSensor s = envSensorFromROS(msg[i]);
+			v.insert(std::make_pair(s.type(), envSensorFromROS(msg[i])));
+		}
+	}
+	return v;
+}
+
+void envSensorsToROS(const rtabmap::EnvSensors & sensors, std::vector<rtabmap_ros::EnvSensor> & msg)
+{
+	msg.clear();
+	if(!sensors.empty())
+	{
+		msg.resize(sensors.size());
+		int i=0;
+		for(rtabmap::EnvSensors::const_iterator iter=sensors.begin(); iter!=sensors.end(); ++iter)
+		{
+			envSensorToROS(iter->second, msg[i++]);
 		}
 	}
 }
@@ -994,6 +1035,7 @@ rtabmap::Signature nodeDataFromROS(const rtabmap_ros::NodeData & msg)
 	s.setWords3(words3D);
 	s.setWordsDescriptors(wordsDescriptors);
 	s.sensorData().setGlobalDescriptors(rtabmap_ros::globalDescriptorsFromROS(msg.globalDescriptors));
+	s.sensorData().setEnvSensors(rtabmap_ros::envSensorsFromROS(msg.env_sensors));
 	s.sensorData().setOccupancyGrid(
 			compressedMatFromBytes(msg.grid_ground),
 			compressedMatFromBytes(msg.grid_obstacles),
@@ -1132,6 +1174,7 @@ void nodeDataToROS(const rtabmap::Signature & signature, rtabmap_ros::NodeData &
 	}
 
 	rtabmap_ros::globalDescriptorsToROS(signature.sensorData().globalDescriptors(), msg.globalDescriptors);
+	rtabmap_ros::envSensorsToROS(signature.sensorData().envSensors(), msg.env_sensors);
 }
 
 rtabmap::Signature nodeInfoFromROS(const rtabmap_ros::NodeData & msg)
@@ -1725,7 +1768,8 @@ bool convertStereoMsg(
 		cv::Mat & right,
 		rtabmap::StereoCameraModel & stereoModel,
 		tf::TransformListener & listener,
-		double waitForTransform)
+		double waitForTransform,
+		bool alreadyRectified)
 {
 	UASSERT(leftImageMsg.get() && rightImageMsg.get());
 
@@ -1799,6 +1843,41 @@ bool convertStereoMsg(
 					 "This warning is printed only once.",
 					 stereoModel.baseline());
 			shown = true;
+		}
+	}
+	else if(stereoModel.baseline() == 0 && alreadyRectified)
+	{
+		rtabmap::Transform stereoTransform = getTransform(
+				leftCamInfoMsg.header.frame_id,
+				rightCamInfoMsg.header.frame_id,
+				leftCamInfoMsg.header.stamp,
+				listener,
+				waitForTransform);
+		if(stereoTransform.isNull() || stereoTransform.x()<=0)
+		{
+			ROS_WARN("We cannot estimated the baseline of the rectified images with tf! (%s->%s = %s)",
+					rightCamInfoMsg.header.frame_id.c_str(), leftCamInfoMsg.header.frame_id.c_str(), stereoTransform.prettyPrint().c_str());
+		}
+		else
+		{
+			static bool warned = false;
+			if(!warned)
+			{
+				ROS_WARN("Right camera info doesn't have Tx set but we are assuming that stereo images are already rectified (see %s parameter). While not "
+						"recommended, we used TF to get the baseline (%s->%s = %fm) for convenience (e.g., D400 ir stereo issue). It is preferred to feed "
+						"a valid right camera info if stereo images are already rectified. This message is only printed once...",
+						rtabmap::Parameters::kRtabmapImagesAlreadyRectified().c_str(),
+						rightCamInfoMsg.header.frame_id.c_str(), leftCamInfoMsg.header.frame_id.c_str(), stereoTransform.x());
+				warned = true;
+			}
+			stereoModel = rtabmap::StereoCameraModel(
+					stereoModel.left().fx(),
+					stereoModel.left().fy(),
+					stereoModel.left().cx(),
+					stereoModel.left().cy(),
+					stereoTransform.x(),
+					stereoModel.localTransform(),
+					stereoModel.left().imageSize());
 		}
 	}
 	return true;

@@ -31,7 +31,7 @@ find_package(find_object_2d)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
-find_package(RTABMap 0.20.0 REQUIRED)
+find_package(RTABMap 0.20.2 REQUIRED)
 
 find_package(OpenCV REQUIRED)
 
@@ -81,7 +81,7 @@ ENDIF(RTABMAP_GUI OR rviz_FOUND)
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
 ## See http://ros.org/doc/api/catkin/html/user_guide/setup_dot_py.html
-# catkin_python_setup()
+catkin_python_setup()
 
 #######################################
 ## Declare ROS messages and services ##
@@ -106,12 +106,14 @@ add_message_files(
    UserData.msg
    GPS.msg
    Path.msg
+   EnvSensor.msg
 )
 
 ## Generate services in the 'srv' folder
  add_service_files(
    FILES
    GetMap.srv
+   GetMap2.srv
    ListLabels.srv
    PublishMap.srv
    ResetPose.srv
@@ -498,6 +500,9 @@ IF(costmap_2d_FOUND)
     target_link_libraries(rtabmap_costmap_plugins2
       ${costmap_2d_LIBRARIES}
     )
+    add_executable(rtabmap_costmap_voxel_markers src/costmap_2d/voxel_markers.cpp)
+    target_link_libraries(rtabmap_costmap_voxel_markers ${costmap_2d_LIBRARIES})
+    set_target_properties(rtabmap_costmap_voxel_markers PROPERTIES OUTPUT_NAME "voxel_markers")
 ENDIF(costmap_2d_FOUND)
 
 #############
@@ -515,6 +520,8 @@ catkin_install_python(PROGRAMS
   scripts/point_to_tf.py
   scripts/transform_to_tf.py
   scripts/yaml_to_camera_info.py
+  scripts/netvlad_tf_ros.py
+  scripts/wifi_signal_pub.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -537,6 +544,7 @@ install(TARGETS
    rtabmap_camera
    rtabmap_rgbd_sync
    rtabmap_rgbd_relay
+   rtabmap_wifi_signal_sub
    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -595,6 +603,7 @@ IF(costmap_2d_FOUND)
     install(TARGETS 
        rtabmap_costmap_plugins
        rtabmap_costmap_plugins2
+       rtabmap_costmap_voxel_markers
        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
