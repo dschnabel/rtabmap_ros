@@ -3532,14 +3532,14 @@ void CoreWrapper::publishStats(const ros::Time & stamp)
 				marker.scale.x = 1;
 				marker.scale.y = 1;
 				marker.scale.z = 0.35;
-				marker.color.a = 0.7;
-				marker.color.r = 0.0;
-				marker.color.g = 1.0;
+				marker.color.a = 1.0;
+				marker.color.r = 1.0;
+				marker.color.g = 0.0;
 				marker.color.b = 0.0;
 				marker.lifetime = ros::Duration(2.0f/rate_);
 
 				marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
-				marker.text = uNumber2Str(iter->first);
+				marker.text = uNumber2Str(-iter->first);
 
 				markers.markers.push_back(marker);
 			}
@@ -3586,8 +3586,8 @@ void CoreWrapper::publishStats(const ros::Time & stamp)
 						marker.scale.y = 1;
 						marker.scale.z = 0.5;
 						marker.color.a = 0.7;
-						marker.color.r = 1.0;
-						marker.color.g = 0.0;
+						marker.color.r = 0.0;
+						marker.color.g = 1.0;
 						marker.color.b = 0.0;
 
 						marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
